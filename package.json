@@ -6,6 +6,10 @@
   "engines": {
     "vscode": "^1.89.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArakawaHenri/Enhanced-Markdown-w-LaTeX-Preview"
+  },  
   "categories": [
     "Other"
   ],
