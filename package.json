@@ -2,6 +2,7 @@
   "name": "enhanced-md-tex-preview",
   "displayName": "Enhanced Markdown w/LaTeX Preview",
   "description": "Enhanced Markdown Preview for Visual Studio Code with LaTeX support",
+  "publisher": "ArakawaHenri",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.89.0"

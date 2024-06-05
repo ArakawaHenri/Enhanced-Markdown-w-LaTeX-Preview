@@ -107,7 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (activeEditor) {
             panelToFileMap.forEach((file, panel) => {
                 if (file === activeEditor.document.fileName) {
-                    updatePreview(activeEditor, panel, vscode.workspace.rootPath || '');
+                    updatePreview(activeEditor, panel, vscode.workspace.rootPath || '', context);
                 }
             });
         }
@@ -156,7 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.ViewColumn.Beside,
                 {
                     enableScripts: true,
-                    localResourceRoots: [vscode.Uri.file(context.extensionPath)]
+                    localResourceRoots: [vscode.Uri.file(context.extensionPath), vscode.Uri.file(vscode.workspace.rootPath || '')]
                 }
             );
 
@@ -164,7 +164,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             let previousContent = '';
 
-            updatePreview(activeEditor, panel, context.extensionPath);
+            updatePreview(activeEditor, panel, context.extensionPath, context);
             scrollToCurrentPosition(activeEditor, panel);
 
             const debouncedUpdatePreview = debounce((activeEditor: vscode.TextEditor, panel: vscode.WebviewPanel, extensionPath: string) => {
@@ -173,9 +173,9 @@ export function activate(context: vscode.ExtensionContext) {
                 previousContent = currentContent;
 
                 if (needsFullUpdate) {
-                    updatePreview(activeEditor, panel, extensionPath);
+                    updatePreview(activeEditor, panel, extensionPath, context);
                 } else {
-                    updatePreviewIncremental(activeEditor, panel, extensionPath, updatedBlocks);
+                    updatePreviewIncremental(activeEditor, panel, extensionPath, updatedBlocks, context);
                 }
             }, 500);
 
@@ -324,7 +324,7 @@ function isLatexCommandChanged(previousBlock: string, currentBlock: string): boo
     return JSON.stringify(previousCommands) !== JSON.stringify(currentCommands);
 }
 
-function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPanel, extensionPath: string) {
+function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPanel, extensionPath: string, context: vscode.ExtensionContext) {
     let disposed = false;
 
     panel.onDidDispose(() => {
@@ -334,8 +334,9 @@ function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPan
 
     if (panel.visible) {
         const markdownContent = addBlockNumbersToMarkdown(activeEditor.document.getText());
+        const absoluteMarkdownContent = convertRelativePathsToAbsolute(markdownContent, vscode.workspace.rootPath || '', context, panel);
 
-        convertMarkdownToTex(markdownContent)
+        convertMarkdownToTex(absoluteMarkdownContent)
             .then((texContent) => {
                 const replacedTexContent = replaceEnumerateWithNumbers(texContent);
                 return convertTexToHtml(replacedTexContent, extensionPath);
@@ -353,7 +354,7 @@ function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPan
     }
 }
 
-function updatePreviewIncremental(activeEditor: vscode.TextEditor, panel: vscode.WebviewPanel, extensionPath: string, updatedBlocks: number[]) {
+function updatePreviewIncremental(activeEditor: vscode.TextEditor, panel: vscode.WebviewPanel, extensionPath: string, updatedBlocks: number[], context: vscode.ExtensionContext) {
     let disposed = false;
 
     panel.onDidDispose(() => {
@@ -363,8 +364,9 @@ function updatePreviewIncremental(activeEditor: vscode.TextEditor, panel: vscode
 
     if (panel.visible) {
         const markdownContent = addBlockNumbersToMarkdown(activeEditor.document.getText());
+        const absoluteMarkdownContent = convertRelativePathsToAbsolute(markdownContent, vscode.workspace.rootPath || '', context, panel);
 
-        convertMarkdownBlocksToTex(markdownContent, updatedBlocks)
+        convertMarkdownBlocksToTex(absoluteMarkdownContent, updatedBlocks)
             .then((texContent) => {
                 const replacedTexContent = replaceEnumerateWithNumbers(texContent);
                 return convertTexToHtml(replacedTexContent, extensionPath);
@@ -571,10 +573,36 @@ function addBlockNumbersToMarkdown(markdown: string): string {
             }
         }
 
+        if (line.match(/!\[([^\]]*)\]\(([^)]+)\)/)) {
+            if (!lastLineWasEmpty) {
+                lastLineWasEmpty = true;
+                return `\n&%&BLOCK_INDEX_${blockIndex++}&%&\n${line}`;
+            } else {
+                return `&%&BLOCK_INDEX_${blockIndex++}&%&\n${line}`;
+            }
+        }
+
         return line;
     }).join('\n');
 
+    if (yamlEnded) {
+        return blockMarkdown.replace(/(\n&%&BLOCK_INDEX_0&%&\n)/, (match) => {
+            return match.replace('0', '1');
+        });
+    }
+
     return blockMarkdown;
+}
+
+function convertRelativePathsToAbsolute(markdown: string, basePath: string, context: vscode.ExtensionContext, panel: vscode.WebviewPanel): string {
+    return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+        if (!src.match(/^https?:\/\//)) {
+            const absPath = path.isAbsolute(src) ? src : path.join(basePath, src);
+            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
+            return `![${alt}](${fileUri})`;
+        }
+        return match;
+    });
 }
 
 function getBlockInfo(content: string, line: number): { blockIndex: number; lineNumber: number } {
@@ -618,9 +646,13 @@ function scrollToCurrentPosition(activeEditor: vscode.TextEditor, panel: vscode.
     const markdownContent = addBlockNumbersToMarkdown(activeEditor.document.getText());
     const visibleRanges = activeEditor.visibleRanges;
     if (visibleRanges.length > 0) {
-        const midLine = visibleRanges[0].start.line + Math.floor((visibleRanges[0].end.line - visibleRanges[0].start.line) / 2);
-        const { blockIndex, lineNumber } = getBlockInfo(markdownContent, midLine);
-        panel.webview.postMessage({ command: 'scrollToPosition', blockIndex, lineInBlock: lineNumber });
+        const firstLine = visibleRanges[0].start.line;
+        const { blockIndex, lineNumber } = getBlockInfo(markdownContent, firstLine);
+        if (blockIndex === -1) {
+            panel.webview.postMessage({ command: 'scrollToTop' });
+        } else {
+            panel.webview.postMessage({ command: 'scrollToPosition', blockIndex, lineInBlock: lineNumber });
+        }
     }
 }
 
@@ -649,6 +681,10 @@ function getWebviewContent(html: string): string {
       }
     }
 
+    function scrollToTop() {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+
     window.addEventListener('message', event => {
       const message = event.data;
       if (message.command === 'updateBlocks') {
@@ -664,7 +700,11 @@ function getWebviewContent(html: string): string {
         vscode.postMessage({ command: 'updateComplete' });
       } else if (message.command === 'scrollToPosition') {
         const { blockIndex, lineInBlock } = message;
+        console.log('scrollToPosition', blockIndex, lineInBlock);
         scrollToPosition(blockIndex, lineInBlock);
+      } else if (message.command === 'scrollToTop') {
+        scrollToTop();
+        console.log('scrollToTop');
       }
     });
   })();
