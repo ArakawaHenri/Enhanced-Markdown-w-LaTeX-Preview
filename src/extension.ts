@@ -344,6 +344,7 @@ function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPan
             .then((htmlContent) => {
                 if (!disposed) {
                     panel.webview.html = getWebviewContent(htmlContent);
+                    scrollToCurrentPosition(activeEditor, panel);
                 }
             })
             .catch((error) => {
@@ -384,6 +385,7 @@ function updatePreviewIncremental(activeEditor: vscode.TextEditor, panel: vscode
 
                 if (!disposed) {
                     panel.webview.postMessage({ command: 'updateBlocks', blocks: updatedHtmlBlocks });
+                    scrollToCurrentPosition(activeEditor, panel);
                 }
             })
             .catch((error) => {
@@ -584,13 +586,6 @@ function addBlockNumbersToMarkdown(markdown: string): string {
 
         return line;
     }).join('\n');
-
-    if (yamlEnded) {
-        return blockMarkdown.replace(/(\n&%&BLOCK_INDEX_0&%&\n)/, (match) => {
-            return match.replace('0', '1');
-        });
-    }
-
     return blockMarkdown;
 }
 
@@ -665,7 +660,7 @@ function getWebviewContent(html: string): string {
   <title>Markdown Preview</title>
 </head>
 <body>
-  <div id="content">${html.replace(/<p>&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;<\/p>/g, '<div data-block-index="$1"></div>').replace(/&amp;%&amp;BLOCK_INDEX_(\d+)&%&/g, '<div data-block-index="$1"></div>')}</div>
+  <div id="content">${html.replace(/<p>&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;<\/p>/g, '<div data-block-index="$1"></div>').replace(/&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;/g, '<div data-block-index="$1"></div>')}</div>
   <script>
   (function() {
     const vscode = acquireVsCodeApi();
@@ -676,7 +671,7 @@ function getWebviewContent(html: string): string {
         const targetElement = elements[blockIndex];
         const nextElement = elements[blockIndex + 1];
         const blockHeight = nextElement ? nextElement.offsetTop - targetElement.offsetTop : targetElement.clientHeight;
-        const scrollPosition = targetElement.offsetTop + (blockHeight * (lineInBlock / (lineInBlock + 1))) - window.innerHeight / 2;
+        const scrollPosition = targetElement.offsetTop + (blockHeight * (lineInBlock / (lineInBlock + 1)));
         window.scrollTo({ top: scrollPosition, behavior: 'auto' });
       }
     }
@@ -700,11 +695,9 @@ function getWebviewContent(html: string): string {
         vscode.postMessage({ command: 'updateComplete' });
       } else if (message.command === 'scrollToPosition') {
         const { blockIndex, lineInBlock } = message;
-        console.log('scrollToPosition', blockIndex, lineInBlock);
         scrollToPosition(blockIndex, lineInBlock);
       } else if (message.command === 'scrollToTop') {
         scrollToTop();
-        console.log('scrollToTop');
       }
     });
   })();
