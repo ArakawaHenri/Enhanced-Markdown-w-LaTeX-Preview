@@ -334,16 +334,15 @@ function updatePreview(activeEditor: vscode.TextEditor, panel: vscode.WebviewPan
 
     if (panel.visible) {
         const markdownContent = addBlockNumbersToMarkdown(activeEditor.document.getText());
-        const absoluteMarkdownContent = convertRelativePathsToAbsolute(markdownContent, vscode.workspace.rootPath || '', context, panel);
 
-        convertMarkdownToTex(absoluteMarkdownContent)
+        convertMarkdownToTex(markdownContent)
             .then((texContent) => {
                 const replacedTexContent = replaceEnumerateWithNumbers(texContent);
                 return convertTexToHtml(replacedTexContent, extensionPath);
             })
             .then((htmlContent) => {
                 if (!disposed) {
-                    panel.webview.html = getWebviewContent(htmlContent);
+                    panel.webview.html = getWebviewContent(htmlContent, panel, activeEditor.document.uri.fsPath);
                     scrollToCurrentPosition(activeEditor, panel);
                 }
             })
@@ -365,9 +364,8 @@ function updatePreviewIncremental(activeEditor: vscode.TextEditor, panel: vscode
 
     if (panel.visible) {
         const markdownContent = addBlockNumbersToMarkdown(activeEditor.document.getText());
-        const absoluteMarkdownContent = convertRelativePathsToAbsolute(markdownContent, vscode.workspace.rootPath || '', context, panel);
 
-        convertMarkdownBlocksToTex(absoluteMarkdownContent, updatedBlocks)
+        convertMarkdownBlocksToTex(markdownContent, updatedBlocks)
             .then((texContent) => {
                 const replacedTexContent = replaceEnumerateWithNumbers(texContent);
                 return convertTexToHtml(replacedTexContent, extensionPath);
@@ -589,17 +587,6 @@ function addBlockNumbersToMarkdown(markdown: string): string {
     return blockMarkdown;
 }
 
-function convertRelativePathsToAbsolute(markdown: string, basePath: string, context: vscode.ExtensionContext, panel: vscode.WebviewPanel): string {
-    return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-        if (!src.match(/^https?:\/\//)) {
-            const absPath = path.isAbsolute(src) ? src : path.join(basePath, src);
-            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
-            return `![${alt}](${fileUri})`;
-        }
-        return match;
-    });
-}
-
 function getBlockInfo(content: string, line: number): { blockIndex: number; lineNumber: number } {
     const lines = content.split('\n');
 
@@ -651,7 +638,24 @@ function scrollToCurrentPosition(activeEditor: vscode.TextEditor, panel: vscode.
     }
 }
 
-function getWebviewContent(html: string): string {
+function getWebviewContent(html: string, panel: vscode.WebviewPanel, markdownFilePath: string): string {
+    const basePath = path.dirname(markdownFilePath);
+    const updatedHtml = html.replace(/src="([^"]+)"/g, (match, src) => {
+        if (!src.match(/^https?:\/\//)) {
+            const absPath = path.isAbsolute(src) ? src : path.join(basePath, src);
+            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
+            return `src="${fileUri}"`;
+        }
+        return match;
+    }).replace(/href="([^"]+)"/g, (match, href) => {
+        if (!href.match(/^https?:\/\//)) {
+            const absPath = path.isAbsolute(href) ? href : path.join(basePath, href);
+            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
+            return `href="${fileUri}"`;
+        }
+        return match;
+    });
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -660,7 +664,7 @@ function getWebviewContent(html: string): string {
   <title>Markdown Preview</title>
 </head>
 <body>
-  <div id="content">${html.replace(/<p>&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;<\/p>/g, '<div data-block-index="$1"></div>').replace(/&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;/g, '<div data-block-index="$1"></div>')}</div>
+  <div id="content">${updatedHtml.replace(/<p>&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;<\/p>/g, '<div data-block-index="$1"></div>').replace(/&amp;%&amp;BLOCK_INDEX_(\d+)&amp;%&amp;/g, '<div data-block-index="$1"></div>')}</div>
   <script>
   (function() {
     const vscode = acquireVsCodeApi();
