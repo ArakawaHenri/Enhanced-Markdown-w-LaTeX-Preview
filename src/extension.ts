@@ -499,18 +499,9 @@ function replaceEnumerateWithNumbers(texContent: string): string {
     const regex = /\\begin\{enumerate\}\s*\\def\\labelenumi\{\\arabic\{enumi\}\.\}(?:\s*\\setcounter\{enumi\}\{(\d+)\})?\s*(?:\\tightlist\s*)?(\\item\s*[\s\S]*?)\\end\{enumerate\}/g;
 
     return texContent.replace(regex, (match, startNum, items) => {
-        let currentNumber = startNum ? parseInt(startNum) + 1 : 1;
-        const itemRegex = /^ *(\\item\s+(.*))$/gm;
-
-        const formattedContent = [];
-        let itemMatch;
-        while ((itemMatch = itemRegex.exec(items)) !== null) {
-            const itemText = itemMatch[2];
-            formattedContent.push(`\\begingroup\n\\setlength{\\parindent}{2em}\n\\indent{} ${currentNumber}. ${itemText.trim()}\n\\endgroup\n`);
-            currentNumber++;
-        }
-
-        return formattedContent.join('\n');
+        const startNumber = startNum ? parseInt(startNum) + 1 : 1;
+        const placeholder = `\\&\\%\\&ENUM_START_NUM_${startNumber}\\&\\%\\&\n`;
+        return placeholder + match;
     });
 }
 
@@ -640,21 +631,42 @@ function scrollToCurrentPosition(activeEditor: vscode.TextEditor, panel: vscode.
 
 function getWebviewContent(html: string, panel: vscode.WebviewPanel, markdownFilePath: string): string {
     const basePath = path.dirname(markdownFilePath);
-    const updatedHtml = html.replace(/src="([^"]+)"/g, (match, src) => {
-        if (!src.match(/^https?:\/\//)) {
-            const absPath = path.isAbsolute(src) ? src : path.join(basePath, src);
-            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
-            return `src="${fileUri}"`;
+    let updatedHtml = html
+        .replace(/src="([^"]+)"/g, (_, src) => 
+            src.match(/^https?:\/\//) ? _ : `src="${panel.webview.asWebviewUri(vscode.Uri.file(path.isAbsolute(src) ? src : path.join(basePath, src)))}"`
+        )
+        .replace(/href="([^"]+)"/g, (_, href) =>
+            href.match(/^https?:\/\//) ? _ : `href="${panel.webview.asWebviewUri(vscode.Uri.file(path.isAbsolute(href) ? href : path.join(basePath, href)))}"`
+        );
+
+    const processPlaceholderForEnum = (html: string, placeholder: string) => {
+        const placeholderRegex = new RegExp(placeholder, 'g');
+        let match;
+        let lastIndex = 0;
+        while ((match = placeholderRegex.exec(html)) !== null) {
+            const startNum = match[1];
+            const placeholderIndex = match.index;
+            const placeholderLength = match[0].length;
+            const searchText = html.slice(lastIndex);
+            const olRegex = /<ol([^>]*)>/;
+            const olMatch = searchText.match(olRegex);
+            if (olMatch && olMatch.index) {
+                const olIndex = lastIndex + olMatch.index;
+                const attributes = olMatch[1].replace(/start=["']?\d+["']?/i, '');
+                const newOlTag = `<ol start="${startNum}"${attributes}>`;
+                html = html.slice(0, olIndex) + newOlTag + html.slice(olIndex + olMatch[0].length);
+                lastIndex = olIndex + newOlTag.length;
+            } else {
+                lastIndex = placeholderIndex + placeholderLength;
+            }
+            html = html.slice(0, placeholderIndex) + html.slice(placeholderIndex + placeholderLength);
+            placeholderRegex.lastIndex = placeholderIndex;
         }
-        return match;
-    }).replace(/href="([^"]+)"/g, (match, href) => {
-        if (!href.match(/^https?:\/\//)) {
-            const absPath = path.isAbsolute(href) ? href : path.join(basePath, href);
-            const fileUri = panel.webview.asWebviewUri(vscode.Uri.file(absPath));
-            return `href="${fileUri}"`;
-        }
-        return match;
-    });
+        return html;
+    };
+
+    updatedHtml = processPlaceholderForEnum(updatedHtml, '&amp;%&amp;ENUM_START_NUM_(\\d+)&amp;%&amp;');
+    updatedHtml = processPlaceholderForEnum(updatedHtml, '<p>&amp;%&amp;ENUM_START_NUM_(\\d+)&amp;%&amp;<\\/p>');
 
     return `<!DOCTYPE html>
 <html lang="en">
